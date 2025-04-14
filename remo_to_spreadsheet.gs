@@ -1,5 +1,3 @@
-
-
 // Please get your access token from https://home.nature.global/
 var REMO_ACCESS_TOKEN = 'YourAccessToken';
 
@@ -7,18 +5,22 @@ var REMO_ACCESS_TOKEN = 'YourAccessToken';
 var SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/hogehoge/edit#gid=0'
 
 // First, Exec this script to create new device sheet. Check new device sheet, and Set your device id.
-var REMO_TARGET_DEVICE_ID = 'YourDeviceId'
+var REMO_TARGET_DEVICE_IDS = [
+  'YourDeviceId1',
+  'YourDeviceId2',
+]
 
 // Second, Exec this script. Check data sheet (default is "remo_logs"). if you can check your device data, Congratuation!
 // Finaly, Set Triger on your project to exec every XXX minutes or hours.
 
 
 
+const EVENT_KINDS = [['te','Temperature'], ['hu','Humidity'], ['il','Illumination'], ['mo','Movement']]
 var REMO_BASE_URL = 'https://api.nature.global/1/'
 var SPREADSHEET_DATA_SHEET_NAME = 'remo_logs'
 
 function get_sensor_data(){
-  
+  // fetch Nature Remo API
   const params = {
     "method" : "get",
     'headers': {'authorization': "Bearer " + REMO_ACCESS_TOKEN}
@@ -30,26 +32,24 @@ function get_sensor_data(){
     Browser.msgBox("failed to connect.Check your Nature Remo Access Token Setting");
     return;
   }
-    
+  
+  // parse fetched JSON
   try {
-    var devices = JSON.parse(response);
+    var all_devices = JSON.parse(response);
   } catch (e) {
     Logger.log("failed to parse response: " + response);
     Browser.msgBox("failed to parse response: " + response);
     return;
   }
-  
-  var newest_events = null;
-  
-  devices.forEach(function( value ) {
-    if(value.id === REMO_TARGET_DEVICE_ID){
-      newest_events = value.newest_events
-    }
+  // leave only devices which defined in REMO_TARGET_DEVICE_IDS
+  var devices = all_devices.filter(function(device){
+    return REMO_TARGET_DEVICE_IDS.includes(device.id)
   })
-  
+  // open spread sheet
   var sheet = SpreadsheetApp.openByUrl(SPREADSHEET_URL);
-  if(newest_events === null){
-    devices.forEach( function( device ) {
+  // list all devices if devices list is empty
+  if (devices.length <= 0) {
+    all_devices.forEach( function( device ) {
       var device_sheet_name = 'device_info_'+device.id
       var device_sheet = sheet.getSheetByName(device_sheet_name)
       if(!device_sheet){
@@ -66,26 +66,45 @@ function get_sensor_data(){
     Browser.msgBox("failed to find target device. Please check device sheet and setting target device id.");
     return;
   }
-  
-  var data_sheet = SpreadsheetApp.getActive().getSheetByName(SPREADSHEET_DATA_SHEET_NAME)
+  // sort order by REMO_TARGET_DEVICE_IDS
+  devices.sort(function(a,b){
+    var index_a = REMO_TARGET_DEVICE_IDS.indexOf(a.id)
+    var index_b = REMO_TARGET_DEVICE_IDS.indexOf(b.id)
+    if (index_a == -1 && index_b == -1) return 0
+    if (index_a == -1 && index_b != -1) return 1
+    if (index_a != -1 && index_b == -1) return -1
+    return index_a - index_b
+  })
+
+  // create sheet if not exists
+  var data_sheet = sheet.getSheetByName(SPREADSHEET_DATA_SHEET_NAME)
   if(!data_sheet){
     var new_data_sheet = sheet.insertSheet(SPREADSHEET_DATA_SHEET_NAME)
-    new_data_sheet.getRange("A1:I1").setValues([["get_time","Temperature_Created_at","Temperature","Humidity_Created_at","Humidity","illumination_Created_at","illumination","movement_Created_at","movement"]])
+    var row = ["get_time"]
+    for (var device of devices) {
+      for (var t of EVENT_KINDS) {
+        if (t[0] in device.newest_events){
+          row.push(device.name+":"+t[1]+"_Created_at", device.name+":"+t[1])
+        }
+      }
+    }
+    new_data_sheet.appendRow(row)
     data_sheet = new_data_sheet
   }
-  
-  now = new Date()
-  data_sheet.appendRow([
-    now,
-    _get_jst_datetime(newest_events.te.created_at),
-    newest_events.te.val,
-    _get_jst_datetime(newest_events.hu.created_at),
-    newest_events.hu.val,
-    _get_jst_datetime(newest_events.il.created_at),
-    newest_events.il.val,
-    _get_jst_datetime(newest_events.mo.created_at),
-    newest_events.mo.val,
-  ]);
+
+  // write data
+  var row = [new Date()]
+  for (var device of devices) {
+    for (var t of EVENT_KINDS) {
+      if (t[0] in device.newest_events) {
+        row.push(
+          _get_jst_datetime(device.newest_events[t[0]].created_at),
+          device.newest_events[t[0]].val
+        )
+      }
+    }
+  }
+  data_sheet.appendRow(row)
 }
 
 function _get_jst_datetime(datetime){
